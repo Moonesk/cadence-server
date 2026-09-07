@@ -87,6 +87,20 @@ function isPlaceLike(str) {
   return typeof str === "string" && /[A-Za-zÀ-ÿ]/.test(str);
 }
 
+async function getVehicleJourneyOrigin(vehicleJourneyId) {
+  // Le champ "direction" ne donne que la destination finale de la ligne,
+  // ce qui est inutile (voire faux) pour afficher la provenance d'un train
+  // à l'arrivée. On va donc chercher le tout premier arrêt de son trajet.
+  try {
+    const data = await sncfFetch(`/vehicle_journeys/${encodeURIComponent(vehicleJourneyId)}`);
+    const vj = data.vehicle_journeys && data.vehicle_journeys[0];
+    const firstStop = vj?.stop_times?.[0]?.stop_point?.name;
+    return firstStop || null;
+  } catch {
+    return null;
+  }
+}
+
 async function getTrainSchedule(stationName, kind) {
   // kind = "departures" | "arrivals"
   const stopAreaId = await resolveStopArea(stationName);
@@ -95,21 +109,33 @@ async function getTrainSchedule(stationName, kind) {
     `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=15`
   );
   const items = data[kind] || [];
-  return items.map((item) => {
-    const info = item.display_informations || {};
-    const dt =
-      kind === "departures"
-        ? item.stop_date_time?.departure_date_time
-        : item.stop_date_time?.arrival_date_time;
-    const mode = info.commercial_mode || "Train";
-    // "direction" contient en général un vrai nom de lieu ; "headsign" est
-    // parfois juste un numéro de mission (fréquent sur certains TER).
-    const place = info.direction || info.headsign;
-    const label = isPlaceLike(place)
-      ? `${mode} ${kind === "departures" ? "à destination de" : "en provenance de"} ${place}`
-      : `${mode} n°${info.headsign || "?"}`;
-    return { time: formatTimeFromNavitia(dt), label };
-  });
+
+  return Promise.all(
+    items.map(async (item) => {
+      const info = item.display_informations || {};
+      const dt =
+        kind === "departures"
+          ? item.stop_date_time?.departure_date_time
+          : item.stop_date_time?.arrival_date_time;
+      const mode = info.commercial_mode || "Train";
+
+      if (kind === "departures") {
+        const destination = info.direction;
+        const label = isPlaceLike(destination)
+          ? `${mode} à destination de ${destination}`
+          : `${mode} n°${info.headsign || "?"}`;
+        return { time: formatTimeFromNavitia(dt), label };
+      }
+
+      // Arrivées : on va chercher le vrai premier arrêt du trajet.
+      const vjId = item.links?.find((l) => l.type === "vehicle_journey")?.id;
+      const origin = vjId ? await getVehicleJourneyOrigin(vjId) : null;
+      const label = isPlaceLike(origin)
+        ? `${mode} en provenance de ${origin}`
+        : `${mode} n°${info.headsign || "?"}`;
+      return { time: formatTimeFromNavitia(dt), label };
+    })
+  );
 }
 
 /* ---------------------------------------------------------
