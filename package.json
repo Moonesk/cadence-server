@@ -1,0 +1,18 @@
+{
+  "name": "cadence-server",
+  "version": "1.0.0",
+  "description": "Serveur relais Cadence — interroge l'API SNCF et AviationStack en sécurité",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  }
+}
