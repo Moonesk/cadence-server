@@ -81,6 +81,12 @@ async function resolveStopArea(stationName) {
   return place.id; // ex. stop_area:SNCF:87471003
 }
 
+function isPlaceLike(str) {
+  // Vraie détection d'un nom de lieu (contient des lettres),
+  // par opposition à un simple numéro de mission/train.
+  return typeof str === "string" && /[A-Za-zÀ-ÿ]/.test(str);
+}
+
 async function getTrainSchedule(stationName, kind) {
   // kind = "departures" | "arrivals"
   const stopAreaId = await resolveStopArea(stationName);
@@ -95,13 +101,14 @@ async function getTrainSchedule(stationName, kind) {
       kind === "departures"
         ? item.stop_date_time?.departure_date_time
         : item.stop_date_time?.arrival_date_time;
-    const otherEnd = kind === "departures" ? info.direction : info.headsign;
-    return {
-      time: formatTimeFromNavitia(dt),
-      label: `${info.commercial_mode || "Train"} ${
-        kind === "departures" ? "à destination de" : "en provenance de"
-      } ${otherEnd || "?"}`.trim(),
-    };
+    const mode = info.commercial_mode || "Train";
+    // "direction" contient en général un vrai nom de lieu ; "headsign" est
+    // parfois juste un numéro de mission (fréquent sur certains TER).
+    const place = info.direction || info.headsign;
+    const label = isPlaceLike(place)
+      ? `${mode} ${kind === "departures" ? "à destination de" : "en provenance de"} ${place}`
+      : `${mode} n°${info.headsign || "?"}`;
+    return { time: formatTimeFromNavitia(dt), label };
   });
 }
 
