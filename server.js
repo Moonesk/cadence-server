@@ -25,6 +25,26 @@ const TICKETMASTER_KEY = process.env.TICKETMASTER_KEY;
 const OPENAGENDA_KEY = process.env.OPENAGENDA_KEY;
 
 /* ---------------------------------------------------------
+   Petit cache mémoire générique (clé -> { valeur, expire }).
+   Sert à éviter de re-consommer le quota SNCF pour des
+   demandes identiques ou récentes, partagé entre tous les
+   utilisateurs de l'appli.
+--------------------------------------------------------- */
+const memoryCache = new Map();
+function cacheGet(key) {
+  const entry = memoryCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expire !== null && Date.now() > entry.expire) {
+    memoryCache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+function cacheSet(key, value, ttlMs) {
+  memoryCache.set(key, { value, expire: ttlMs === null ? null : Date.now() + ttlMs });
+}
+
+/* ---------------------------------------------------------
    Identifiants des agendas officiels OpenAgenda par ville
    (trouvés via /v2/agendas?search={ville}&official=1)
 --------------------------------------------------------- */
@@ -127,11 +147,15 @@ async function sncfFetch(path) {
 }
 
 async function resolveStopArea(stationName) {
+  const cacheKey = `stopArea:${stationName.toLowerCase()}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
   const data = await sncfFetch(
     `/places?q=${encodeURIComponent(stationName)}&type[]=stop_area&count=1`
   );
   const place = data.places && data.places[0];
   if (!place) throw new Error(`Gare introuvable : ${stationName}`);
+  cacheSet(cacheKey, place.id, null); // ne change jamais, cache permanent
   return place.id; // ex. stop_area:SNCF:87471003
 }
 
@@ -145,11 +169,15 @@ async function getVehicleJourneyOrigin(vehicleJourneyId) {
   // Le champ "direction" ne donne que la destination finale de la ligne,
   // ce qui est inutile (voire faux) pour afficher la provenance d'un train
   // à l'arrivée. On va donc chercher le tout premier arrêt de son trajet.
+  const cacheKey = `vjOrigin:${vehicleJourneyId}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached;
   try {
     const data = await sncfFetch(`/vehicle_journeys/${encodeURIComponent(vehicleJourneyId)}`);
     const vj = data.vehicle_journeys && data.vehicle_journeys[0];
-    const firstStop = vj?.stop_times?.[0]?.stop_point?.name;
-    return firstStop || null;
+    const firstStop = vj?.stop_times?.[0]?.stop_point?.name || null;
+    cacheSet(cacheKey, firstStop, 6 * 60 * 60 * 1000); // 6h, un même train revient souvent
+    return firstStop;
   } catch {
     return null;
   }
@@ -157,24 +185,35 @@ async function getVehicleJourneyOrigin(vehicleJourneyId) {
 
 async function getTrainSchedule(stationName, kind, dateStr, startHour, endHour) {
   // kind = "departures" | "arrivals"
+  const date = dateStr || todayDateStr();
+  const sh = startHour ?? 0;
+  const eh = endHour ?? 23;
+
+  // Résultat mis en cache 3 min, partagé entre tous les utilisateurs —
+  // évite de re-consommer le quota SNCF à chaque changement d'onglet ou
+  // d'horaire sur la même gare.
+  const cacheKey = `trainSchedule:${stationName.toLowerCase()}:${kind}:${date}:${sh}:${eh}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
   // On cible directement la plage horaire demandée (pas "toute la journée")
   // car sur une grosse gare, une journée complète dépasse largement les 100
   // résultats que l'API peut renvoyer en un seul appel — ça tronquait le
   // résultat à une petite tranche horaire au lieu de couvrir toute la plage.
   const stopAreaId = await resolveStopArea(stationName);
-  const date = dateStr || todayDateStr();
-  const sh = startHour ?? 0;
-  const eh = endHour ?? 23;
   const pad = (n) => String(n).padStart(2, "0");
   const datetime = `${date.replace(/-/g, "")}T${pad(sh)}0000`;
   const hoursSpan = eh >= sh ? eh - sh + 1 : 24 - sh + eh + 1;
   const duration = Math.min(hoursSpan * 3600, 86399);
+  // Limité à 60 (au lieu de 300) : chaque train en "arrivées" déclenche un
+  // appel SNCF supplémentaire pour trouver sa provenance, donc ce nombre
+  // pèse directement sur le quota quotidien.
   const data = await sncfFetch(
-    `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=300&duration=${duration}`
+    `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=60&duration=${duration}`
   );
   const items = data[kind] || [];
 
-  return Promise.all(
+  const result = await Promise.all(
     items.map(async (item) => {
       const info = item.display_informations || {};
       const dt =
@@ -200,6 +239,9 @@ async function getTrainSchedule(stationName, kind, dateStr, startHour, endHour) 
       return { time: formatTimeFromNavitia(dt), label };
     })
   );
+
+  cacheSet(cacheKey, result, 3 * 60 * 1000);
+  return result;
 }
 
 /* ---------------------------------------------------------
