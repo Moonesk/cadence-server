@@ -155,12 +155,22 @@ async function getVehicleJourneyOrigin(vehicleJourneyId) {
   }
 }
 
-async function getTrainSchedule(stationName, kind, dateStr) {
+async function getTrainSchedule(stationName, kind, dateStr, startHour, endHour) {
   // kind = "departures" | "arrivals"
+  // On cible directement la plage horaire demandée (pas "toute la journée")
+  // car sur une grosse gare, une journée complète dépasse largement les 100
+  // résultats que l'API peut renvoyer en un seul appel — ça tronquait le
+  // résultat à une petite tranche horaire au lieu de couvrir toute la plage.
   const stopAreaId = await resolveStopArea(stationName);
-  const datetime = navitiaDatetimeStartOfDay(dateStr || todayDateStr());
+  const date = dateStr || todayDateStr();
+  const sh = startHour ?? 0;
+  const eh = endHour ?? 23;
+  const pad = (n) => String(n).padStart(2, "0");
+  const datetime = `${date.replace(/-/g, "")}T${pad(sh)}0000`;
+  const hoursSpan = eh >= sh ? eh - sh + 1 : 24 - sh + eh + 1;
+  const duration = Math.min(hoursSpan * 3600, 86399);
   const data = await sncfFetch(
-    `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=100&duration=86399`
+    `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=300&duration=${duration}`
   );
   const items = data[kind] || [];
 
@@ -201,7 +211,7 @@ async function getFlightSchedule(cityKey, kind, dateStr) {
   const param = kind === "departures" ? "dep_iata" : "arr_iata";
   const date = dateStr || todayDateStr();
   const res = await fetch(
-    `https://api.aviationstack.com/v1/flights?access_key=${AVIATIONSTACK_KEY}&${param}=${iata}&flight_date=${date}&limit=100`
+    `https://api.aviationstack.com/v1/flights?access_key=${AVIATIONSTACK_KEY}&${param}=${iata}&flight_date=${date}&limit=300`
   );
   if (!res.ok) throw new Error(`AviationStack a répondu ${res.status}`);
   const data = await res.json();
@@ -309,14 +319,16 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", service: "cadence-server" });
 });
 
-// GET /api/trains?station=Rennes&kind=arrivals|departures&date=2026-09-15
+// GET /api/trains?station=Rennes&kind=arrivals|departures&date=2026-09-15&startHour=6&endHour=22
 app.get("/api/trains", async (req, res) => {
-  const { station, kind, date } = req.query;
+  const { station, kind, date, startHour, endHour } = req.query;
   if (!station || !["arrivals", "departures"].includes(kind)) {
     return res.status(400).json({ error: "Paramètres attendus : station, kind=arrivals|departures" });
   }
   try {
-    const result = await getTrainSchedule(station, kind, date);
+    const sh = startHour !== undefined ? Number(startHour) : undefined;
+    const eh = endHour !== undefined ? Number(endHour) : undefined;
+    const result = await getTrainSchedule(station, kind, date, sh, eh);
     res.json({ station, kind, date: date || todayDateStr(), result });
   } catch (err) {
     res.status(502).json({ error: err.message });
