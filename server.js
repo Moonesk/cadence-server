@@ -101,13 +101,16 @@ function formatTimeFromISO(isoStr) {
   return d.toISOString().slice(11, 16);
 }
 
-function navitiaDatetimeNow() {
+function navitiaDatetimeStartOfDay(dateStr) {
+  // dateStr au format "YYYY-MM-DD". On part de 00:00:00 pour couvrir
+  // toute la journée, pas seulement "à partir de maintenant".
+  return `${dateStr.replace(/-/g, "")}T000000`;
+}
+
+function todayDateStr() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
-  return (
-    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
-    `T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  );
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /* ---------------------------------------------------------
@@ -152,12 +155,12 @@ async function getVehicleJourneyOrigin(vehicleJourneyId) {
   }
 }
 
-async function getTrainSchedule(stationName, kind) {
+async function getTrainSchedule(stationName, kind, dateStr) {
   // kind = "departures" | "arrivals"
   const stopAreaId = await resolveStopArea(stationName);
-  const datetime = navitiaDatetimeNow();
+  const datetime = navitiaDatetimeStartOfDay(dateStr || todayDateStr());
   const data = await sncfFetch(
-    `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=15`
+    `/stop_areas/${encodeURIComponent(stopAreaId)}/${kind}?datetime=${datetime}&count=100&duration=86399`
   );
   const items = data[kind] || [];
 
@@ -192,12 +195,13 @@ async function getTrainSchedule(stationName, kind) {
 /* ---------------------------------------------------------
    AviationStack — arrivées / départs vols par aéroport
 --------------------------------------------------------- */
-async function getFlightSchedule(cityKey, kind) {
+async function getFlightSchedule(cityKey, kind, dateStr) {
   const iata = AIRPORT_CODES[cityKey];
   if (!iata) throw new Error(`Ville non couverte : ${cityKey}`);
   const param = kind === "departures" ? "dep_iata" : "arr_iata";
+  const date = dateStr || todayDateStr();
   const res = await fetch(
-    `https://api.aviationstack.com/v1/flights?access_key=${AVIATIONSTACK_KEY}&${param}=${iata}&limit=15`
+    `https://api.aviationstack.com/v1/flights?access_key=${AVIATIONSTACK_KEY}&${param}=${iata}&flight_date=${date}&limit=100`
   );
   if (!res.ok) throw new Error(`AviationStack a répondu ${res.status}`);
   const data = await res.json();
@@ -305,29 +309,29 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", service: "cadence-server" });
 });
 
-// GET /api/trains?station=Rennes&kind=arrivals|departures
+// GET /api/trains?station=Rennes&kind=arrivals|departures&date=2026-09-15
 app.get("/api/trains", async (req, res) => {
-  const { station, kind } = req.query;
+  const { station, kind, date } = req.query;
   if (!station || !["arrivals", "departures"].includes(kind)) {
     return res.status(400).json({ error: "Paramètres attendus : station, kind=arrivals|departures" });
   }
   try {
-    const result = await getTrainSchedule(station, kind);
-    res.json({ station, kind, result });
+    const result = await getTrainSchedule(station, kind, date);
+    res.json({ station, kind, date: date || todayDateStr(), result });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
 });
 
-// GET /api/flights?city=rennes&kind=arrivals|departures
+// GET /api/flights?city=rennes&kind=arrivals|departures&date=2026-09-15
 app.get("/api/flights", async (req, res) => {
-  const { city, kind } = req.query;
+  const { city, kind, date } = req.query;
   if (!city || !["arrivals", "departures"].includes(kind)) {
     return res.status(400).json({ error: "Paramètres attendus : city, kind=arrivals|departures" });
   }
   try {
-    const result = await getFlightSchedule(city, kind);
-    res.json({ city, kind, result });
+    const result = await getFlightSchedule(city, kind, date);
+    res.json({ city, kind, date: date || todayDateStr(), result });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
