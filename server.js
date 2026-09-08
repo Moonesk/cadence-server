@@ -23,6 +23,18 @@ const SNCF_TOKEN = process.env.SNCF_TOKEN;
 const AVIATIONSTACK_KEY = process.env.AVIATIONSTACK_KEY;
 const TICKETMASTER_KEY = process.env.TICKETMASTER_KEY;
 const OPENAGENDA_KEY = process.env.OPENAGENDA_KEY;
+const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY;
+
+/* ---------------------------------------------------------
+   Club principal de chaque ville (pour les matchs à domicile)
+--------------------------------------------------------- */
+const CITY_CLUBS = {
+  paris: "Paris Saint Germain",
+  lyon: "Olympique Lyonnais",
+  marseille: "Olympique Marseille",
+  toulouse: "Toulouse FC",
+  rennes: "Stade Rennais",
+};
 
 /* ---------------------------------------------------------
    Identifiants des agendas officiels OpenAgenda par ville
@@ -187,7 +199,47 @@ async function getFlightSchedule(cityKey, kind) {
 }
 
 /* ---------------------------------------------------------
-   OpenAgenda — événements à venir, agenda officiel par ville
+   API-Football — prochains matchs à domicile du club de la ville
+--------------------------------------------------------- */
+async function apiFootballFetch(path) {
+  const res = await fetch(`https://v3.football.api-sports.io${path}`, {
+    headers: { "x-apisports-key": APIFOOTBALL_KEY },
+  });
+  if (!res.ok) throw new Error(`API-Football a répondu ${res.status}`);
+  return res.json();
+}
+
+async function resolveTeamId(teamName) {
+  const data = await apiFootballFetch(`/teams?search=${encodeURIComponent(teamName)}`);
+  const team = data.response?.[0]?.team;
+  if (!team) throw new Error(`Club introuvable : ${teamName}`);
+  return team.id;
+}
+
+async function getUpcomingHomeMatches(cityKey) {
+  const teamName = CITY_CLUBS[cityKey];
+  if (!teamName) return [];
+  const teamId = await resolveTeamId(teamName);
+  const data = await apiFootballFetch(`/fixtures?team=${teamId}&next=5`);
+  const fixtures = data.response || [];
+  return fixtures
+    .filter((f) => f.teams?.home?.id === teamId) // uniquement les matchs à domicile
+    .map((f) => {
+      const kickoff = new Date(f.fixture.date);
+      return {
+        name: `${f.teams.home.name} - ${f.teams.away.name}`,
+        date: kickoff.toISOString().slice(0, 10),
+        time: kickoff.toISOString().slice(11, 16),
+        venue: f.fixture.venue?.name || "Stade",
+        category: "Sport",
+        url: null,
+      };
+    });
+}
+
+/* ---------------------------------------------------------
+   Événements — fusion des concerts/festivals (OpenAgenda ou
+   Ticketmaster) et des matchs à domicile (API-Football).
 --------------------------------------------------------- */
 async function getOpenAgendaEvents(agendaUid) {
   const now = new Date();
@@ -221,16 +273,7 @@ async function getOpenAgendaEvents(agendaUid) {
   });
 }
 
-async function getEvents(cityKey) {
-  // On préfère l'agenda officiel OpenAgenda de la ville quand on le connaît
-  // (bien meilleure couverture en France que Ticketmaster).
-  const agendaUid = OPENAGENDA_IDS[cityKey];
-  if (agendaUid) {
-    return getOpenAgendaEvents(agendaUid);
-  }
-
-  // Repli : Ticketmaster (couverture limitée pour la France, mais mieux
-  // que rien tant qu'on n'a pas encore trouvé l'agenda officiel de cette ville).
+async function getTicketmasterEvents(cityKey) {
   const coords = CITY_COORDS[cityKey];
   if (!coords) throw new Error(`Ville non couverte : ${cityKey}`);
 
@@ -264,6 +307,32 @@ async function getEvents(cityKey) {
       category: segment || "Événement",
       url: ev.url || null,
     };
+  });
+}
+
+async function getEvents(cityKey) {
+  // Concerts / festivals / expos : agenda officiel OpenAgenda si on le
+  // connaît, sinon repli sur Ticketmaster.
+  let culturalEvents = [];
+  try {
+    const agendaUid = OPENAGENDA_IDS[cityKey];
+    culturalEvents = agendaUid ? await getOpenAgendaEvents(agendaUid) : await getTicketmasterEvents(cityKey);
+  } catch (err) {
+    culturalEvents = [];
+  }
+
+  // Matchs à domicile du club principal de la ville.
+  let matches = [];
+  try {
+    matches = await getUpcomingHomeMatches(cityKey);
+  } catch (err) {
+    matches = [];
+  }
+
+  return [...culturalEvents, ...matches].sort((a, b) => {
+    const da = a.date ? new Date(`${a.date}T${a.time || "00:00"}`) : 0;
+    const db = b.date ? new Date(`${b.date}T${b.time || "00:00"}`) : 0;
+    return da - db;
   });
 }
 
