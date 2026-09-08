@@ -190,11 +190,13 @@ async function getFlightSchedule(cityKey, kind) {
    OpenAgenda — événements à venir, agenda officiel par ville
 --------------------------------------------------------- */
 async function getOpenAgendaEvents(agendaUid) {
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const url =
     `https://api.openagenda.com/v2/agendas/${agendaUid}/events` +
     `?key=${OPENAGENDA_KEY}` +
-    `&timings[gte]=${encodeURIComponent(nowIso)}` +
+    `&timings[gte]=${encodeURIComponent(now.toISOString())}` +
+    `&timings[lte]=${encodeURIComponent(in30Days.toISOString())}` +
     `&sort=timings.asc` +
     `&size=20`;
 
@@ -232,11 +234,15 @@ async function getEvents(cityKey) {
   const coords = CITY_COORDS[cityKey];
   if (!coords) throw new Error(`Ville non couverte : ${cityKey}`);
 
+  const now = new Date();
+  const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   const url =
     `https://app.ticketmaster.com/discovery/v2/events.json` +
     `?apikey=${TICKETMASTER_KEY}` +
     `&latlong=${coords.lat},${coords.lon}` +
     `&radius=40&unit=km` +
+    `&startDateTime=${now.toISOString().split(".")[0]}Z` +
+    `&endDateTime=${in30Days.toISOString().split(".")[0]}Z` +
     `&sort=date,asc` +
     `&size=20`;
 
