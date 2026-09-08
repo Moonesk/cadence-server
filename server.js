@@ -30,6 +30,12 @@ const OPENAGENDA_KEY = process.env.OPENAGENDA_KEY;
 --------------------------------------------------------- */
 const OPENAGENDA_IDS = {
   rennes: 85319813, // "Rennes Métropole"
+  marseille: 78455922, // "Aix-Marseille Provence Métropole"
+  toulouse: 42448083, // "Toulouse" (Ville de Toulouse)
+  nice: 35257307, // "Ville de Nice"
+  nantes: 91531980, // "Nantes Métropole"
+  bordeaux: 83392987, // "Ville de Bordeaux"
+  lille: 47938975, // "Ville de Lille"
 };
 
 /* ---------------------------------------------------------
