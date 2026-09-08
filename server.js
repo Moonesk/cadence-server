@@ -26,14 +26,15 @@ const OPENAGENDA_KEY = process.env.OPENAGENDA_KEY;
 const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY;
 
 /* ---------------------------------------------------------
-   Club principal de chaque ville (pour les matchs à domicile)
+   Identifiants API-Football du club principal de chaque ville
+   (trouvés via dashboard.api-football.com/soccer/ids/teams)
 --------------------------------------------------------- */
-const CITY_CLUBS = {
-  paris: "Paris Saint Germain",
-  lyon: "Olympique Lyonnais",
-  marseille: "Olympique Marseille",
-  toulouse: "Toulouse FC",
-  rennes: "Stade Rennais",
+const CITY_TEAM_IDS = {
+  paris: 85, // Paris Saint Germain
+  lyon: 80, // Lyon
+  marseille: 81, // Marseille
+  toulouse: 96, // Toulouse
+  rennes: 94, // Rennes
 };
 
 /* ---------------------------------------------------------
@@ -209,17 +210,9 @@ async function apiFootballFetch(path) {
   return res.json();
 }
 
-async function resolveTeamId(teamName) {
-  const data = await apiFootballFetch(`/teams?search=${encodeURIComponent(teamName)}`);
-  const team = data.response?.[0]?.team;
-  if (!team) throw new Error(`Club introuvable : ${teamName}`);
-  return team.id;
-}
-
 async function getUpcomingHomeMatches(cityKey) {
-  const teamName = CITY_CLUBS[cityKey];
-  if (!teamName) return [];
-  const teamId = await resolveTeamId(teamName);
+  const teamId = CITY_TEAM_IDS[cityKey];
+  if (!teamId) return [];
   const data = await apiFootballFetch(`/fixtures?team=${teamId}&next=5`);
   const fixtures = data.response || [];
   return fixtures
