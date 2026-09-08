@@ -23,19 +23,6 @@ const SNCF_TOKEN = process.env.SNCF_TOKEN;
 const AVIATIONSTACK_KEY = process.env.AVIATIONSTACK_KEY;
 const TICKETMASTER_KEY = process.env.TICKETMASTER_KEY;
 const OPENAGENDA_KEY = process.env.OPENAGENDA_KEY;
-const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY;
-
-/* ---------------------------------------------------------
-   Identifiants API-Football du club principal de chaque ville
-   (trouvés via dashboard.api-football.com/soccer/ids/teams)
---------------------------------------------------------- */
-const CITY_TEAM_IDS = {
-  paris: 85, // Paris Saint Germain
-  lyon: 80, // Lyon
-  marseille: 81, // Marseille
-  toulouse: 96, // Toulouse
-  rennes: 94, // Rennes
-};
 
 /* ---------------------------------------------------------
    Identifiants des agendas officiels OpenAgenda par ville
@@ -55,11 +42,26 @@ const CITY_COORDS = {
   marseille: { lat: 43.2965, lon: 5.3698 },
   toulouse: { lat: 43.6047, lon: 1.4442 },
   rennes: { lat: 48.1173, lon: -1.6778 },
+  nice: { lat: 43.7102, lon: 7.262 },
+  cannes: { lat: 43.5528, lon: 7.0174 },
+  antibes: { lat: 43.5804, lon: 7.1251 },
+  monaco: { lat: 43.7384, lon: 7.4246 },
+  nantes: { lat: 47.2184, lon: -1.5536 },
+  strasbourg: { lat: 48.5734, lon: 7.7521 },
+  bordeaux: { lat: 44.8378, lon: -0.5792 },
+  lille: { lat: 50.6292, lon: 3.0573 },
+  montpellier: { lat: 43.6108, lon: 3.8767 },
+  grenoble: { lat: 45.1885, lon: 5.7245 },
+  toulon: { lat: 43.1242, lon: 5.928 },
+  reims: { lat: 49.2583, lon: 4.0317 },
+  "saint-etienne": { lat: 45.4397, lon: 4.3872 },
 };
 
 /* ---------------------------------------------------------
    Codes IATA des aéroports couverts (pas besoin de les
    redemander à chaque appel, ils ne changent jamais).
+   Les villes sans grand aéroport n'ont volontairement pas
+   d'entrée ici — l'appli gère ce cas proprement.
 --------------------------------------------------------- */
 const AIRPORT_CODES = {
   paris: "CDG",
@@ -67,6 +69,14 @@ const AIRPORT_CODES = {
   marseille: "MRS",
   toulouse: "TLS",
   rennes: "RNS",
+  nice: "NCE",
+  nantes: "NTE",
+  strasbourg: "SXB",
+  bordeaux: "BOD",
+  lille: "LIL",
+  montpellier: "MPL",
+  grenoble: "GNB",
+  toulon: "TLN",
 };
 
 /* ---------------------------------------------------------
@@ -200,39 +210,7 @@ async function getFlightSchedule(cityKey, kind) {
 }
 
 /* ---------------------------------------------------------
-   API-Football — prochains matchs à domicile du club de la ville
---------------------------------------------------------- */
-async function apiFootballFetch(path) {
-  const res = await fetch(`https://v3.football.api-sports.io${path}`, {
-    headers: { "x-apisports-key": APIFOOTBALL_KEY },
-  });
-  if (!res.ok) throw new Error(`API-Football a répondu ${res.status}`);
-  return res.json();
-}
-
-async function getUpcomingHomeMatches(cityKey) {
-  const teamId = CITY_TEAM_IDS[cityKey];
-  if (!teamId) return [];
-  const data = await apiFootballFetch(`/fixtures?team=${teamId}&next=5`);
-  const fixtures = data.response || [];
-  return fixtures
-    .filter((f) => f.teams?.home?.id === teamId) // uniquement les matchs à domicile
-    .map((f) => {
-      const kickoff = new Date(f.fixture.date);
-      return {
-        name: `${f.teams.home.name} - ${f.teams.away.name}`,
-        date: kickoff.toISOString().slice(0, 10),
-        time: kickoff.toISOString().slice(11, 16),
-        venue: f.fixture.venue?.name || "Stade",
-        category: "Sport",
-        url: null,
-      };
-    });
-}
-
-/* ---------------------------------------------------------
-   Événements — fusion des concerts/festivals (OpenAgenda ou
-   Ticketmaster) et des matchs à domicile (API-Football).
+   Événements — concerts/festivals (OpenAgenda ou Ticketmaster)
 --------------------------------------------------------- */
 async function getOpenAgendaEvents(agendaUid) {
   const now = new Date();
@@ -306,27 +284,12 @@ async function getTicketmasterEvents(cityKey) {
 async function getEvents(cityKey) {
   // Concerts / festivals / expos : agenda officiel OpenAgenda si on le
   // connaît, sinon repli sur Ticketmaster.
-  let culturalEvents = [];
   try {
     const agendaUid = OPENAGENDA_IDS[cityKey];
-    culturalEvents = agendaUid ? await getOpenAgendaEvents(agendaUid) : await getTicketmasterEvents(cityKey);
+    return agendaUid ? await getOpenAgendaEvents(agendaUid) : await getTicketmasterEvents(cityKey);
   } catch (err) {
-    culturalEvents = [];
+    return [];
   }
-
-  // Matchs à domicile du club principal de la ville.
-  let matches = [];
-  try {
-    matches = await getUpcomingHomeMatches(cityKey);
-  } catch (err) {
-    matches = [];
-  }
-
-  return [...culturalEvents, ...matches].sort((a, b) => {
-    const da = a.date ? new Date(`${a.date}T${a.time || "00:00"}`) : 0;
-    const db = b.date ? new Date(`${b.date}T${b.time || "00:00"}`) : 0;
-    return da - db;
-  });
 }
 
 /* ---------------------------------------------------------
