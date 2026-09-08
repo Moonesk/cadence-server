@@ -22,6 +22,15 @@ const PORT = process.env.PORT || 3000;
 const SNCF_TOKEN = process.env.SNCF_TOKEN;
 const AVIATIONSTACK_KEY = process.env.AVIATIONSTACK_KEY;
 const TICKETMASTER_KEY = process.env.TICKETMASTER_KEY;
+const OPENAGENDA_KEY = process.env.OPENAGENDA_KEY;
+
+/* ---------------------------------------------------------
+   Identifiants des agendas officiels OpenAgenda par ville
+   (trouvés via /v2/agendas?search={ville}&official=1)
+--------------------------------------------------------- */
+const OPENAGENDA_IDS = {
+  rennes: 85319813, // "Rennes Métropole"
+};
 
 /* ---------------------------------------------------------
    Coordonnées des villes, pour chercher les événements dans
@@ -178,10 +187,48 @@ async function getFlightSchedule(cityKey, kind) {
 }
 
 /* ---------------------------------------------------------
-   Ticketmaster — événements à venir autour d'une ville
-   (concerts, sport, théâtre, festivals...)
+   OpenAgenda — événements à venir, agenda officiel par ville
 --------------------------------------------------------- */
+async function getOpenAgendaEvents(agendaUid) {
+  const nowIso = new Date().toISOString();
+  const url =
+    `https://api.openagenda.com/v2/agendas/${agendaUid}/events` +
+    `?key=${OPENAGENDA_KEY}` +
+    `&timings[gte]=${encodeURIComponent(nowIso)}` +
+    `&sort=timings.asc` +
+    `&size=20`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OpenAgenda a répondu ${res.status}`);
+  const data = await res.json();
+  const items = data.events || [];
+
+  return items.map((ev) => {
+    const title = ev.title?.fr || Object.values(ev.title || {})[0] || "Événement";
+    const begin = ev.firstTiming?.begin || ev.nextTiming?.begin;
+    const date = begin ? begin.slice(0, 10) : null;
+    const time = begin ? begin.slice(11, 16) : null;
+    return {
+      name: title,
+      date,
+      time,
+      venue: ev.location?.name || "Lieu non précisé",
+      category: "Événement",
+      url: ev.onlineAccessLink || null,
+    };
+  });
+}
+
 async function getEvents(cityKey) {
+  // On préfère l'agenda officiel OpenAgenda de la ville quand on le connaît
+  // (bien meilleure couverture en France que Ticketmaster).
+  const agendaUid = OPENAGENDA_IDS[cityKey];
+  if (agendaUid) {
+    return getOpenAgendaEvents(agendaUid);
+  }
+
+  // Repli : Ticketmaster (couverture limitée pour la France, mais mieux
+  // que rien tant qu'on n'a pas encore trouvé l'agenda officiel de cette ville).
   const coords = CITY_COORDS[cityKey];
   if (!coords) throw new Error(`Ville non couverte : ${cityKey}`);
 
@@ -201,8 +248,8 @@ async function getEvents(cityKey) {
   return items.map((ev) => {
     const venue = ev._embedded?.venues?.[0];
     const segment = ev.classifications?.[0]?.segment?.name;
-    const localDate = ev.dates?.start?.localDate; // "2026-09-20"
-    const localTime = ev.dates?.start?.localTime; // "20:00:00"
+    const localDate = ev.dates?.start?.localDate;
+    const localTime = ev.dates?.start?.localTime;
     return {
       name: ev.name,
       date: localDate || null,
