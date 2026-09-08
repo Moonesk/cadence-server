@@ -21,6 +21,19 @@ app.use(cors()); // à restreindre à votre domaine d'appli une fois en prod
 const PORT = process.env.PORT || 3000;
 const SNCF_TOKEN = process.env.SNCF_TOKEN;
 const AVIATIONSTACK_KEY = process.env.AVIATIONSTACK_KEY;
+const TICKETMASTER_KEY = process.env.TICKETMASTER_KEY;
+
+/* ---------------------------------------------------------
+   Coordonnées des villes, pour chercher les événements dans
+   un rayon autour de chacune.
+--------------------------------------------------------- */
+const CITY_COORDS = {
+  paris: { lat: 48.8566, lon: 2.3522 },
+  lyon: { lat: 45.764, lon: 4.8357 },
+  marseille: { lat: 43.2965, lon: 5.3698 },
+  toulouse: { lat: 43.6047, lon: 1.4442 },
+  rennes: { lat: 48.1173, lon: -1.6778 },
+};
 
 /* ---------------------------------------------------------
    Codes IATA des aéroports couverts (pas besoin de les
@@ -165,6 +178,43 @@ async function getFlightSchedule(cityKey, kind) {
 }
 
 /* ---------------------------------------------------------
+   Ticketmaster — événements à venir autour d'une ville
+   (concerts, sport, théâtre, festivals...)
+--------------------------------------------------------- */
+async function getEvents(cityKey) {
+  const coords = CITY_COORDS[cityKey];
+  if (!coords) throw new Error(`Ville non couverte : ${cityKey}`);
+
+  const url =
+    `https://app.ticketmaster.com/discovery/v2/events.json` +
+    `?apikey=${TICKETMASTER_KEY}` +
+    `&latlong=${coords.lat},${coords.lon}` +
+    `&radius=40&unit=km` +
+    `&sort=date,asc` +
+    `&size=20`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Ticketmaster a répondu ${res.status}`);
+  const data = await res.json();
+  const items = data._embedded?.events || [];
+
+  return items.map((ev) => {
+    const venue = ev._embedded?.venues?.[0];
+    const segment = ev.classifications?.[0]?.segment?.name;
+    const localDate = ev.dates?.start?.localDate; // "2026-09-20"
+    const localTime = ev.dates?.start?.localTime; // "20:00:00"
+    return {
+      name: ev.name,
+      date: localDate || null,
+      time: localTime ? localTime.slice(0, 5) : null,
+      venue: venue?.name || "Lieu non précisé",
+      category: segment || "Événement",
+      url: ev.url || null,
+    };
+  });
+}
+
+/* ---------------------------------------------------------
    Routes
 --------------------------------------------------------- */
 app.get("/", (req, res) => {
@@ -194,6 +244,20 @@ app.get("/api/flights", async (req, res) => {
   try {
     const result = await getFlightSchedule(city, kind);
     res.json({ city, kind, result });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// GET /api/events?city=rennes
+app.get("/api/events", async (req, res) => {
+  const { city } = req.query;
+  if (!city) {
+    return res.status(400).json({ error: "Paramètre attendu : city" });
+  }
+  try {
+    const result = await getEvents(city);
+    res.json({ city, result });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
