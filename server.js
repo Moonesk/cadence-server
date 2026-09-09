@@ -300,21 +300,27 @@ async function getOpenAgendaEvents(agendaUid) {
   if (!res.ok) throw new Error(`OpenAgenda a répondu ${res.status}`);
   const data = await res.json();
   const items = data.events || [];
+  const todayStr = now.toISOString().slice(0, 10);
 
-  return items.map((ev) => {
-    const title = ev.title?.fr || Object.values(ev.title || {})[0] || "Événement";
-    const begin = ev.firstTiming?.begin || ev.nextTiming?.begin;
-    const date = begin ? begin.slice(0, 10) : null;
-    const time = begin ? begin.slice(11, 16) : null;
-    return {
-      name: title,
-      date,
-      time,
-      venue: ev.location?.name || "Lieu non précisé",
-      category: "Événement",
-      url: ev.onlineAccessLink || null,
-    };
-  });
+  return items
+    .map((ev) => {
+      const title = ev.title?.fr || Object.values(ev.title || {})[0] || "Événement";
+      // On priorise nextTiming (la prochaine occurrence réelle) plutôt que
+      // firstTiming, qui peut être une date déjà passée pour un événement
+      // récurrent ou une exposition longue durée.
+      const begin = ev.nextTiming?.begin || ev.firstTiming?.begin;
+      const date = begin ? begin.slice(0, 10) : null;
+      const time = begin ? begin.slice(11, 16) : null;
+      return {
+        name: title,
+        date,
+        time,
+        venue: ev.location?.name || "Lieu non précisé",
+        category: "Événement",
+        url: ev.onlineAccessLink || null,
+      };
+    })
+    .filter((ev) => ev.date && ev.date >= todayStr); // sécurité anti-date passée
 }
 
 async function getTicketmasterEvents(cityKey) {
