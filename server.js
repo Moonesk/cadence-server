@@ -250,15 +250,23 @@ async function getTrainSchedule(stationName, kind, dateStr, startHour, endHour) 
 async function getFlightSchedule(cityKey, kind, dateStr) {
   const iata = AIRPORT_CODES[cityKey];
   if (!iata) throw new Error(`Ville non couverte : ${cityKey}`);
-  const param = kind === "departures" ? "dep_iata" : "arr_iata";
   const date = dateStr || todayDateStr();
+
+  // Résultat mis en cache 3 min, partagé entre tous les utilisateurs —
+  // le quota gratuit AviationStack est petit et se réinitialise au mois,
+  // donc chaque appel évité compte beaucoup plus que pour la SNCF.
+  const cacheKey = `flightSchedule:${cityKey}:${kind}:${date}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const param = kind === "departures" ? "dep_iata" : "arr_iata";
   const res = await fetch(
-    `https://api.aviationstack.com/v1/flights?access_key=${AVIATIONSTACK_KEY}&${param}=${iata}&flight_date=${date}&limit=300`
+    `https://api.aviationstack.com/v1/flights?access_key=${AVIATIONSTACK_KEY}&${param}=${iata}&flight_date=${date}&limit=100`
   );
   if (!res.ok) throw new Error(`AviationStack a répondu ${res.status}`);
   const data = await res.json();
   const items = data.data || [];
-  return items.map((f) => {
+  const result = items.map((f) => {
     const leg = kind === "departures" ? f.departure : f.arrival;
     const otherAirport = kind === "departures" ? f.arrival?.airport : f.departure?.airport;
     return {
@@ -269,6 +277,9 @@ async function getFlightSchedule(cityKey, kind, dateStr) {
       status: f.flight_status,
     };
   });
+
+  cacheSet(cacheKey, result, 3 * 60 * 1000);
+  return result;
 }
 
 /* ---------------------------------------------------------
